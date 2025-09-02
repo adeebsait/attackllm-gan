@@ -12,7 +12,7 @@ from peft import PeftModel
 MODEL_ID = "mistralai/Mistral-7B-Instruct-v0.3"
 ADAPTER_PATH = "./fine_tuned_discriminator"
 RESULTS_DIR = "./experiment_results"
-TOTAL_ITERATIONS = 100  # Set this to a high number for a long run (e.g., 10000)
+TOTAL_ITERATIONS = 10  # Set this to a high number for a long run (e.g., 10000)
 
 
 # --- Utility Functions ---
