@@ -8,32 +8,22 @@ from peft import PeftModel
 
 # --- Utility Functions ---
 def extract_json(text):
-    """Universally extracts a JSON object from a string."""
-    patterns = [r"``````", r"``````", r"``````"]
-    for pattern in patterns:
-        match = re.search(pattern, text, re.DOTALL)
-        if match:
-            try:
-                return json.loads(match.group(1))
-            except (json.JSONDecodeError, IndexError):
-                continue
-    try:
-        start_index = text.find('{')
-        if start_index != -1:
-            open_braces = 0
-            for i, char in enumerate(text[start_index:]):
-                if char == '{':
-                    open_braces += 1
-                elif char == '}':
-                    open_braces -= 1
-                if open_braces == 0: return json.loads(text[start_index: start_index + i + 1])
-    except json.JSONDecodeError:
-        pass
+    """Universally extracts the last and most complete JSON object from a string."""
+    # Find all possible JSON objects (from '{' to '}')
+    json_candidates = re.findall(r'\{[^{}]*\}|\{(?:[^{}]|\{[^{}]*\})*\}', text)
+    if not json_candidates:
+        return None
+    # Assume the last JSON object is the one we want
+    for candidate in reversed(json_candidates):
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
     return None
 
 
 def clear_gpu_memory():
-    """Clears GPU memory by deleting model objects and running the garbage collector."""
+    """Clears GPU memory."""
     torch.cuda.empty_cache()
     gc.collect()
 
@@ -62,20 +52,27 @@ for i in range(number_of_iterations):
     generator_model = AutoModelForCausalLM.from_pretrained(model_id, quantization_config=quantization_config,
                                                            device_map="auto")
 
-    generator_prompt = f"""[INST]You are an expert red teamer. Your goal is to create a multi-step attack plan.
-    **Network Context:** {network_context}
-    **Feedback from Previous Attempt:** {feedback_from_discriminator}
-    **Instructions:** Create an improved, logical attack plan. Your response must be ONLY a single, valid JSON object with an "attack_plan" list.[/INST]"""
+    # FINAL, HYPER-SPECIFIC PROMPT
+    generator_prompt = f"""[INST]You are a silent security tool. Your only output should be a JSON object.
+
+    **Goal:** Create a multi-step attack plan.
+    **Context:** {network_context}
+    **Feedback:** {feedback_from_discriminator}
+
+    **Your Task:**
+    Based on the context and feedback, generate an improved attack plan.
+
+    **CRITICAL INSTRUCTION:** Your response MUST be ONLY the JSON object containing the 'attack_plan'. Do NOT include any other text, context, or explanations.
+    [/INST]"""
 
     generator_input = tokenizer(generator_prompt, return_tensors="pt").to("cuda")
     with torch.no_grad():
         response = generator_model.generate(**generator_input, max_new_tokens=1024, pad_token_id=tokenizer.eos_token_id)
     response_text = tokenizer.decode(response[0], skip_special_tokens=True)
-    generated_plan = extract_json(response_text.split("[/INST]")[-1])
+    generated_plan = extract_json(response_text)
 
     del generator_model
     clear_gpu_memory()
-    print("--- [Generator] Model unloaded from GPU.")
 
     if not generated_plan or "attack_plan" not in generated_plan:
         print("Generator failed to produce a valid plan. Providing feedback to try again.")
@@ -94,15 +91,17 @@ for i in range(number_of_iterations):
     evaluations = []
     total_plausibility = 0
     for step in generated_plan["attack_plan"]:
-        desc = step.get('description', 'N/A')
-        discriminator_prompt = f"[INST]You are an IoT security expert. Evaluate this attack step. Provide your rating as a JSON object with 'plausibility', 'stealth', and 'impact' scores (0.0-1.0), and a 'critique'. Attack Step: '{desc}'[/INST]"
+        desc = step.get('description') or step.get(next(iter(step)))  # Handle different keys
+        if not isinstance(desc, str): desc = json.dumps(desc)
+
+        discriminator_prompt = f"[INST]You are an IoT security expert. Evaluate this attack step. Provide your rating as a JSON object. Attack Step: '{desc}'[/INST]"
 
         discriminator_input = tokenizer(discriminator_prompt, return_tensors="pt").to("cuda")
         with torch.no_grad():
             response = discriminator_model.generate(**discriminator_input, max_new_tokens=200,
                                                     pad_token_id=tokenizer.eos_token_id)
         response_text = tokenizer.decode(response[0], skip_special_tokens=True)
-        evaluation = extract_json(response_text.split("[/INST]")[-1])
+        evaluation = extract_json(response_text)
 
         if evaluation:
             evaluations.append({"step": desc, "evaluation": evaluation})
@@ -114,7 +113,6 @@ for i in range(number_of_iterations):
     del discriminator_base
     del discriminator_model
     clear_gpu_memory()
-    print("--- [Discriminator] Model unloaded from GPU.")
 
     # --- 3. CREATE FEEDBACK FOR NEXT LOOP ---
     avg_plausibility = (total_plausibility / len(evaluations)) if evaluations else 0
