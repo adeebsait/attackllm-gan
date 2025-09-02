@@ -92,13 +92,19 @@ class AttackLLMGAN:
 
     def plot_results(self):
         if not self.history: return
-        successful_iterations = [item for item in self.history if item.get("generated_plan")]
-        if not successful_iterations: return
+
+        # ** THE FIX IS HERE **
+        # Only include iterations that were successful and have metrics
+        successful_iterations = [item for item in self.history if item.get("generated_plan") and item.get("metrics")]
+
+        if not successful_iterations:
+            print("No successful iterations with metrics to plot.")
+            return
 
         iterations = [item['iteration'] for item in successful_iterations]
         metrics = [item['metrics'] for item in successful_iterations]
 
-        fig, axs = plt.subplots(3, 1, figsize=(15, 20), sharex=True)
+        fig, axs = plt.subplots(2, 1, figsize=(15, 15), sharex=True)
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
         fig.suptitle(f'AttackLLM-GAN Performance Metrics ({timestamp})', fontsize=16)
 
@@ -125,29 +131,22 @@ class AttackLLMGAN:
         print(f"\nComprehensive performance chart saved to {plot_path}")
 
     def print_summary(self):
-        """Prints a final summary of the experiment results."""
         print(f"\n{'=' * 20} EXPERIMENT SUMMARY {'=' * 20}")
-        if not self.history:
-            print("No data to summarize.")
-            return
+        if not self.history: return
 
+        # ** THE FIX IS HERE **
         successful_iterations = [item for item in self.history if item.get("generated_plan") and item.get("metrics")]
+
         total_runs = len(self.history)
         success_rate = len(successful_iterations) / total_runs if total_runs > 0 else 0
-
-        start_time_str = self.history[0]['timestamp']
-        end_time_str = self.history[-1]['timestamp']
-        start_time = datetime.datetime.strptime(start_time_str, "%Y-%m-%d %H:%M:%S")
-        end_time = datetime.datetime.strptime(end_time_str, "%Y-%m-%d %H:%M:%S")
-        total_duration = end_time - start_time
+        start_time = datetime.datetime.strptime(self.history[0]['timestamp'], "%Y-%m-%d %H:%M:%S")
+        end_time = datetime.datetime.strptime(self.history[-1]['timestamp'], "%Y-%m-%d %H:%M:%S")
 
         print(f"Total Iterations Run: {total_runs}")
-        print(f"Experiment Duration: {str(total_duration)}")
-        print(f"Generator Success Rate: {success_rate:.2%}")
+        print(f"Experiment Duration: {end_time - start_time}")
+        print(f"Generator Plan Creation Success Rate: {success_rate:.2%}")
 
-        if not successful_iterations:
-            print("No successful iterations to analyze for performance metrics.")
-            return
+        if not successful_iterations: return
 
         metrics = [item['metrics'] for item in successful_iterations]
         avg_plausibility = np.mean([m['avg_plausibility'] for m in metrics])
@@ -156,12 +155,12 @@ class AttackLLMGAN:
         avg_plan_length = np.mean([m['plan_length'] for m in metrics])
         avg_diversity = np.mean([m['technique_diversity'] for m in metrics])
 
-        print("\n--- Overall Performance Averages ---")
+        print("\n--- Overall Performance Averages (for successful iterations) ---")
         print(f"  Average Plan Plausibility: {avg_plausibility:.3f}")
         print(f"  Average Plan Stealth:      {avg_stealth:.3f}")
         print(f"  Average Plan Impact:       {avg_impact:.3f}")
 
-        print("\n--- Plan Complexity Averages ---")
+        print("\n--- Plan Complexity & Creativity Averages ---")
         print(f"  Average Plan Length:      {avg_plan_length:.2f} steps")
         print(f"  Average Technique Diversity: {avg_diversity:.2f} unique TTPs per plan")
 
@@ -169,7 +168,7 @@ class AttackLLMGAN:
         print("\n--- Best Performing Iteration ---")
         print(f"  Iteration Number: {best_iteration['iteration']}")
         print(f"  Highest Plausibility Score: {best_iteration['metrics']['avg_plausibility']:.3f}")
-        print(f"{'=' * 52}")
+        print(f"{'=' * 62}")
 
     def run_experiment(self, total_iterations):
         network_context = """{"known_devices": [{"ip_address": "172.28.0.10", "device_type": "webcam"}]}"""
@@ -178,21 +177,16 @@ class AttackLLMGAN:
 
         for i in range(total_iterations):
             print(f"\n{'=' * 20} ADVERSARIAL ITERATION {i + 1}/{total_iterations} {'=' * 20}")
-
             generated_plan = self.run_generator(network_context, feedback)
             iteration_data = {"iteration": i + 1, "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
                               "generated_plan": generated_plan}
-
             if not generated_plan or "attack_plan" not in generated_plan:
                 feedback = "You failed to produce a valid JSON plan. Please strictly adhere to the format."
             else:
                 print(f"--- [Generator] Plan created with {len(generated_plan['attack_plan'])} steps.")
                 evaluations = self.run_discriminator(generated_plan)
-
-                plan_steps = generated_plan['attack_plan']
-                num_steps = len(plan_steps)
+                plan_steps, num_steps = generated_plan['attack_plan'], len(generated_plan['attack_plan'])
                 unique_ttps = len(set(step.get('technique_id', 'N/A') for step in plan_steps))
-
                 avg_plausibility = sum(
                     calculate_metric_score(e['evaluation'], 'plausibility') for e in evaluations) / len(
                     evaluations) if evaluations else 0
@@ -200,22 +194,16 @@ class AttackLLMGAN:
                     evaluations) if evaluations else 0
                 avg_impact = sum(calculate_metric_score(e['evaluation'], 'impact') for e in evaluations) / len(
                     evaluations) if evaluations else 0
-
                 iteration_data["evaluations"] = evaluations
-                iteration_data["metrics"] = {
-                    "avg_plausibility": avg_plausibility, "avg_stealth": avg_stealth, "avg_impact": avg_impact,
-                    "plan_length": num_steps, "technique_diversity": unique_ttps
-                }
-
+                iteration_data["metrics"] = {"avg_plausibility": avg_plausibility, "avg_stealth": avg_stealth,
+                                             "avg_impact": avg_impact, "plan_length": num_steps,
+                                             "technique_diversity": unique_ttps}
                 feedback = f"The last plan's avg plausibility was {avg_plausibility:.2f}. Critique: {json.dumps(evaluations)}. Improve the plan."
                 print(
                     f"--- Iteration {i + 1} complete. Avg Plausibility: {avg_plausibility:.2f}, Avg Stealth: {avg_stealth:.2f}, Avg Impact: {avg_impact:.2f} ---")
-
             self.history.append(iteration_data)
             with open(log_file_path, 'a') as f:
                 f.write(json.dumps(iteration_data) + '\n')
-
-        print(f"\n{'=' * 20} EXPERIMENT COMPLETE {'=' * 20}")
         self.plot_results()
         self.print_summary()
 
