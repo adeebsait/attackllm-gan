@@ -1,14 +1,14 @@
 import torch
+import gc
 import json
 import re
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 from peft import PeftModel
 
 
-# --- Utility Functions (from previous scripts) ---
-
+# --- Utility Functions ---
 def extract_json(text):
-    """Universally extracts a JSON object from a string, handling various markdown fences."""
+    """Universally extracts a JSON object from a string."""
     patterns = [r"``````", r"``````", r"``````"]
     for pattern in patterns:
         match = re.search(pattern, text, re.DOTALL)
@@ -26,70 +26,46 @@ def extract_json(text):
                     open_braces += 1
                 elif char == '}':
                     open_braces -= 1
-                if open_braces == 0:
-                    json_str = text[start_index: start_index + i + 1]
-                    return json.loads(json_str)
+                if open_braces == 0: return json.loads(text[start_index: start_index + i + 1])
     except json.JSONDecodeError:
         pass
     return None
 
 
-# --- Model Loading ---
+def clear_gpu_memory():
+    """Clears GPU memory by deleting model objects and running the garbage collector."""
+    torch.cuda.empty_cache()
+    gc.collect()
 
-print("Loading all models... This may take a moment.")
 
-# Common configuration
+# --- Shared Configuration ---
 model_id = "mistralai/Mistral-7B-Instruct-v0.3"
+adapter_path = "./fine_tuned_discriminator"
 quantization_config = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4",
                                          bnb_4bit_compute_dtype=torch.float16)
 tokenizer = AutoTokenizer.from_pretrained(model_id)
 tokenizer.pad_token = tokenizer.eos_token
 
-# 1. Load the Generator (Base Model)
-generator_model = AutoModelForCausalLM.from_pretrained(model_id, quantization_config=quantization_config,
-                                                       device_map="auto")
-print("Generator model loaded.")
-
-# 2. Load the Discriminator (Base Model + Fine-Tuned Adapter)
-discriminator_base_model = AutoModelForCausalLM.from_pretrained(model_id, quantization_config=quantization_config,
-                                                                device_map="auto")
-adapter_path = "./fine_tuned_discriminator"
-discriminator_model = PeftModel.from_pretrained(discriminator_base_model, adapter_path)
-print("Discriminator model loaded.")
-
 # --- Adversarial Loop ---
-
-# Initial cyber range context
 network_context = """
-{
-  "known_devices": [{"ip_address": "172.28.0.10", "device_type": "webcam", "notes": "Suspected default credentials and command injection."}],
-  "attacker_ip": "172.28.0.1"
-}
+{"known_devices": [{"ip_address": "172.28.0.10", "device_type": "webcam", "notes": "Suspected default credentials."}]}
 """
 feedback_from_discriminator = "No feedback yet. This is the first attempt."
 number_of_iterations = 3
+generated_plan = None
 
 for i in range(number_of_iterations):
     print(f"\n{'=' * 20} ADVERSARIAL ITERATION {i + 1}/{number_of_iterations} {'=' * 20}")
 
     # --- 1. GENERATOR'S TURN ---
-    print("\n--- [Generator] Creating attack plan...")
-    generator_prompt = f"""
-    [INST]
-    You are an expert automated red teamer. Your goal is to create a multi-step attack plan to gain initial access to a webcam and perform reconnaissance.
+    print("\n--- [Generator] Loading and creating attack plan...")
+    generator_model = AutoModelForCausalLM.from_pretrained(model_id, quantization_config=quantization_config,
+                                                           device_map="auto")
 
-    **Network Context:**
-    {network_context}
-
-    **Feedback from Previous Attempt:**
-    {feedback_from_discriminator}
-
-    **Instructions:**
-    - Analyze the context and feedback.
-    - Create an improved, logical, step-by-step attack plan.
-    - Your entire response must be ONLY a single, valid JSON object containing an "attack_plan" list.
-    [/INST]
-    """
+    generator_prompt = f"""[INST]You are an expert red teamer. Your goal is to create a multi-step attack plan.
+    **Network Context:** {network_context}
+    **Feedback from Previous Attempt:** {feedback_from_discriminator}
+    **Instructions:** Create an improved, logical attack plan. Your response must be ONLY a single, valid JSON object with an "attack_plan" list.[/INST]"""
 
     generator_input = tokenizer(generator_prompt, return_tensors="pt").to("cuda")
     with torch.no_grad():
@@ -97,25 +73,30 @@ for i in range(number_of_iterations):
     response_text = tokenizer.decode(response[0], skip_special_tokens=True)
     generated_plan = extract_json(response_text.split("[/INST]")[-1])
 
+    # Clean up Generator to free VRAM
+    del generator_model
+    clear_gpu_memory()
+    print("--- [Generator] Model unloaded from GPU.")
+
     if not generated_plan or "attack_plan" not in generated_plan:
-        print("Generator failed to produce a valid plan. Skipping iteration.")
-        feedback_from_discriminator = "You failed to produce a valid JSON attack plan. Please try again, ensuring your output is a single, complete JSON object."
+        feedback_from_discriminator = "You failed to produce a valid JSON plan. Please try again."
         continue
 
     print(f"--- [Generator] Plan created with {len(generated_plan['attack_plan'])} steps.")
     print(json.dumps(generated_plan, indent=2))
 
     # --- 2. DISCRIMINATOR'S TURN ---
-    print("\n--- [Discriminator] Evaluating plan...")
+    print("\n--- [Discriminator] Loading and evaluating plan...")
+    discriminator_base = AutoModelForCausalLM.from_pretrained(model_id, quantization_config=quantization_config,
+                                                              device_map="auto")
+    discriminator_model = PeftModel.from_pretrained(discriminator_base, adapter_path)
+
     evaluations = []
     total_plausibility = 0
     for step in generated_plan["attack_plan"]:
-        discriminator_prompt = f"""
-        [INST]
-        You are an IoT security expert. Evaluate the following attack step. Provide your rating in a structured JSON format with 'plausibility', 'stealth', and 'impact' scores from 0.0 to 1.0, and a brief 'critique'.
-        Attack Step: '{step.get('description', 'No description provided.')}'
-        [/INST]
-        """
+        desc = step.get('description', 'N/A')
+        discriminator_prompt = f"[INST]You are an IoT security expert. Evaluate this attack step. Provide your rating as a JSON object with 'plausibility', 'stealth', and 'impact' scores (0.0-1.0), and a 'critique'. Attack Step: '{desc}'[/INST]"
+
         discriminator_input = tokenizer(discriminator_prompt, return_tensors="pt").to("cuda")
         with torch.no_grad():
             response = discriminator_model.generate(**discriminator_input, max_new_tokens=200,
@@ -124,14 +105,20 @@ for i in range(number_of_iterations):
         evaluation = extract_json(response_text.split("[/INST]")[-1])
 
         if evaluation:
-            print(f"  - Step Evaluation: {evaluation}")
-            evaluations.append({"step": step.get('description'), "evaluation": evaluation})
+            evaluations.append({"step": desc, "evaluation": evaluation})
             total_plausibility += evaluation.get('plausibility', 0)
-        else:
-            print(f"  - Failed to evaluate step: {step.get('description')}")
+
+    print("--- [Discriminator] Evaluations complete:")
+    print(json.dumps(evaluations, indent=2))
+
+    # Clean up Discriminator to free VRAM
+    del discriminator_base
+    del discriminator_model
+    clear_gpu_memory()
+    print("--- [Discriminator] Model unloaded from GPU.")
 
     # --- 3. CREATE FEEDBACK FOR NEXT LOOP ---
-    avg_plausibility = total_plausibility / len(generated_plan["attack_plan"]) if generated_plan["attack_plan"] else 0
-    feedback_from_discriminator = f"The previous plan's average plausibility score was {avg_plausibility:.2f}. The detailed critique was: {json.dumps(evaluations, indent=2)}. Focus on improving the plausibility of the steps."
+    avg_plausibility = (total_plausibility / len(evaluations)) if evaluations else 0
+    feedback_from_discriminator = f"The previous plan's average plausibility score was {avg_plausibility:.2f}. The critique was: {json.dumps(evaluations)}. Focus on improving the plausibility of low-scoring steps."
 
 print(f"\n{'=' * 20} ADVERSARIAL LOOP COMPLETE {'=' * 20}")
