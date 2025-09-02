@@ -4,7 +4,7 @@ from datasets import load_dataset
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from trl import SFTTrainer
 
-# --- Model and Tokenizer Loading (as before) ---
+# --- Model and Tokenizer Loading ---
 model_id = "mistralai/Mistral-7B-Instruct-v0.3"
 quantization_config = BitsAndBytesConfig(
     load_in_4bit=True,
@@ -12,10 +12,11 @@ quantization_config = BitsAndBytesConfig(
     bnb_4bit_compute_dtype=torch.float16,
 )
 
-tokenizer = AutoTokenizer.from_pretrained(model_id)
+tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
 # Set a padding token if one is not already set
 if tokenizer.pad_token is None:
     tokenizer.pad_token = tokenizer.eos_token
+    tokenizer.padding_side = "right" # Fix for fp16
 
 model = AutoModelForCausalLM.from_pretrained(
     model_id,
@@ -24,20 +25,19 @@ model = AutoModelForCausalLM.from_pretrained(
 )
 
 # --- LoRA and PEFT Configuration ---
-# Prepare the model for k-bit training
+model.config.use_cache = False
+model.config.pretraining_tp = 1
 model = prepare_model_for_kbit_training(model)
 
-# Configure LoRA to adapt the model
 lora_config = LoraConfig(
     r=16,
     lora_alpha=32,
-    target_modules=["q_proj", "k_proj", "v_proj", "o_proj"], # Target specific layers for adaptation
+    target_modules=["q_proj", "k_proj", "v_proj", "o_proj"],
     lora_dropout=0.05,
     bias="none",
     task_type="CAUSAL_LM"
 )
 
-# Add the LoRA adapter to the model
 model = get_peft_model(model, lora_config)
 
 print("Model prepared for LoRA fine-tuning.")
@@ -47,23 +47,24 @@ dataset = load_dataset("json", data_files="discriminator_dataset.json", split="t
 
 # --- Training Configuration ---
 training_args = TrainingArguments(
-    output_dir="./results",          # Directory to save the results
-    per_device_train_batch_size=1,   # Batch size for training
-    gradient_accumulation_steps=4,   # Accumulate gradients to simulate a larger batch size
-    learning_rate=2e-4,              # The learning rate
-    num_train_epochs=3,              # Number of times to go through the dataset
-    logging_steps=1,                 # How often to log training progress
-    save_total_limit=2,              # Limit the number of checkpoints saved
-    fp16=True,                       # Use mixed precision training for efficiency
+    output_dir="./results",
+    num_train_epochs=3,
+    per_device_train_batch_size=1,
+    gradient_accumulation_steps=4,
+    learning_rate=2e-4,
+    logging_steps=1,
+    save_total_limit=2,
+    fp16=True,
+    optim="paged_adamw_32bit", # More memory-efficient optimizer
+    lr_scheduler_type="cosine", # Modern learning rate scheduler
 )
 
 # --- Initialize the Trainer ---
 trainer = SFTTrainer(
     model=model,
     train_dataset=dataset,
-    args=training_args,
     peft_config=lora_config,
-    max_seq_length=512,              # The maximum length of a sequence
+    args=training_args,
 )
 
 # --- Start Fine-Tuning ---
@@ -72,7 +73,7 @@ trainer.train()
 print("Fine-tuning complete.")
 
 # --- Save the Fine-Tuned Adapter ---
-# This saves only the small, newly trained LoRA adapter layers, not the whole model.
 adapter_save_path = "./fine_tuned_discriminator"
 trainer.save_model(adapter_save_path)
 print(f"Fine-tuned adapter saved to {adapter_save_path}")
+
