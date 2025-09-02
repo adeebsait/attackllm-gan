@@ -6,7 +6,6 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 def extract_json(text):
     """Safely extracts the first valid JSON object from a string."""
     try:
-        # Find the first '{' and the last '}' to locate the JSON object
         start_index = text.find('{')
         end_index = text.rfind('}') + 1
         if start_index != -1 and end_index > start_index:
@@ -66,6 +65,7 @@ You are an expert automated red teamer. Your task is to generate a sequence of a
     - "technique_id": The relevant MITRE ATT&CK Technique ID (e.g., "T1078.001").
     - "description": A brief, human-readable description of the step.
     - "command": The exact shell command to execute for the step. Use placeholders like `<attacker_ip>` where necessary.
+6.  **Crucially, ensure your entire response is a single, complete, and valid JSON object. Do not get cut off.**
 
 Generate the attack plan now.
 [/INST]
@@ -78,22 +78,18 @@ model.eval()
 with torch.no_grad():
     response_tokens = model.generate(
         **model_input,
-        max_new_tokens=512,
+        # Increase token limit to prevent truncation
+        max_new_tokens=1024,
         pad_token_id=tokenizer.eos_token_id
     )
     full_response_text = tokenizer.decode(response_tokens[0], skip_special_tokens=True)
 
-# --- CORRECTED Parse and Display the Output ---
-# The model's response starts after the [/INST] tag.
-# We will find the JSON within the entire text.
+# --- Parse and Display the Output ---
 response_payload = full_response_text.split("[/INST]")[-1].strip()
-
 print("\n--- Raw Model Output ---")
 print(response_payload)
 
-# Use our robust function to find the JSON
 attack_plan_json = extract_json(response_payload)
-
 if attack_plan_json:
     print("\n--- Parsed Attack Plan ---")
     print(json.dumps(attack_plan_json, indent=2))
