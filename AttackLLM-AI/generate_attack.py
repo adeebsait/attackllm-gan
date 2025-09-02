@@ -9,7 +9,7 @@ def extract_json(text):
         # Find the first '{' and the last '}' to locate the JSON object
         start_index = text.find('{')
         end_index = text.rfind('}') + 1
-        if start_index != -1 and end_index != -1:
+        if start_index != -1 and end_index > start_index:
             json_str = text[start_index:end_index]
             return json.loads(json_str)
     except json.JSONDecodeError:
@@ -18,9 +18,7 @@ def extract_json(text):
     return None
 
 # --- Model Loading ---
-# We load the base model without any fine-tuned adapters.
 model_id = "mistralai/Mistral-7B-Instruct-v0.3"
-
 quantization_config = BitsAndBytesConfig(
     load_in_4bit=True,
     bnb_4bit_quant_type="nf4",
@@ -36,7 +34,6 @@ model = AutoModelForCausalLM.from_pretrained(
 print("Generator model loaded successfully.")
 
 # --- Define the Cyber Range Context ---
-# In a real scenario, this would be discovered dynamically. For now, we hardcode it.
 network_context = """
 {
   "known_devices": [
@@ -51,8 +48,6 @@ network_context = """
 """
 
 # --- Master Prompt Engineering ---
-# This is the most critical part of the Generator.
-# It defines the model's role, goal, constraints, and desired output format.
 master_prompt = f"""
 [INST]
 You are an expert automated red teamer. Your task is to generate a sequence of attack steps to achieve a specific goal within a given network context.
@@ -83,18 +78,20 @@ model.eval()
 with torch.no_grad():
     response_tokens = model.generate(
         **model_input,
-        max_new_tokens=512,  # Increase token limit to allow for a multi-step plan
+        max_new_tokens=512,
         pad_token_id=tokenizer.eos_token_id
     )
     full_response_text = tokenizer.decode(response_tokens[0], skip_special_tokens=True)
 
-# --- Parse and Display the Output ---
-# We only care about the text generated after the instruction block.
-response_payload = full_response_text.split("[/INST]")[1].strip()
+# --- CORRECTED Parse and Display the Output ---
+# The model's response starts after the [/INST] tag.
+# We will find the JSON within the entire text.
+response_payload = full_response_text.split("[/INST]")[-1].strip()
 
 print("\n--- Raw Model Output ---")
 print(response_payload)
 
+# Use our robust function to find the JSON
 attack_plan_json = extract_json(response_payload)
 
 if attack_plan_json:
