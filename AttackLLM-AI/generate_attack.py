@@ -5,17 +5,27 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
 def extract_json(text):
     """
-    Safely extracts a JSON object from a string, handling markdown fences.
+    Universally extracts a JSON object from a string, handling various markdown fences.
     """
-    # Use regex to find content between ``````, or just the first {..} block
-    match = re.search(r"``````", text, re.DOTALL)
-    if match:
-        json_str = match.group(1)
-    else:
-        # Fallback for plain JSON without markdown fences
+    # Pattern to find JSON within ``````markdown, or ```
+    patterns = [
+        r"```json\s*(\{.*?\})\s*```
+        r"```markdown\s*(\{.*?\})\s*```
+        r"```\s*(\{.*?\})\s*```
+    ]
+
+    for pattern in patterns:
+        match = re.search(pattern, text, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group(1))
+            except json.JSONDecodeError:
+                continue # Try the next pattern if this one fails
+
+    # Fallback for plain JSON without any markdown fences
+    try:
         start_index = text.find('{')
         if start_index != -1:
-            # Find the matching closing brace
             open_braces = 0
             for i, char in enumerate(text[start_index:]):
                 if char == '{':
@@ -24,17 +34,12 @@ def extract_json(text):
                     open_braces -= 1
                 if open_braces == 0:
                     json_str = text[start_index : start_index + i + 1]
-                    break
-            else:
-                return None # No matching brace found
-        else:
-            return None # No '{' found
-
-    try:
-        return json.loads(json_str)
+                    return json.loads(json_str)
     except json.JSONDecodeError:
-        print("Error: Could not decode the extracted JSON string.")
-        return None
+        pass # If all methods fail, return None
+
+    print("Error: Could not decode or find a valid JSON object in the model's response.")
+    return None
 
 # --- Model Loading ---
 model_id = "mistralai/Mistral-7B-Instruct-v0.3"
@@ -70,16 +75,19 @@ network_context = """
 master_prompt = f"""
 [INST]
 You are an expert automated red teamer. Your task is to generate a sequence of attack steps to achieve a specific goal within a given network context.
+
 **Goal:** Gain initial access to the network via the webcam and then perform reconnaissance to identify other potential targets.
+
 **Instructions:**
 1.  Analyze the provided network context.
 2.  Create a logical, step-by-step attack plan.
-3.  Your entire response must be ONLY a single, valid JSON object, optionally enclosed in `````` markdown fences.
+3.  Your entire response must be ONLY a single, valid JSON object, optionally enclosed in markdown fences.
 4.  The JSON object must contain a single key, "attack_plan", which is a list of steps.
 5.  Each step in the list must be a JSON object with three keys:
     - "technique_id": The relevant MITRE ATT&CK Technique ID (e.g., "T1078.001").
     - "description": A brief, human-readable description of the step.
     - "command": The exact shell command to execute for the step. Use placeholders where necessary.
+
 Generate the attack plan now.
 [/INST]
 """
@@ -94,7 +102,7 @@ with torch.no_grad():
         max_new_tokens=1024,
         pad_token_id=tokenizer.eos_token_id
     )
-    full_response_text = tokenizer.decode(response_tokens[0], skip_special_tokens=True)
+    full_response_text = tokenizer.decode(response_tokens, skip_special_tokens=True)
 
 # --- Parse and Display the Output ---
 response_payload = full_response_text.split("[/INST]")[-1].strip()
