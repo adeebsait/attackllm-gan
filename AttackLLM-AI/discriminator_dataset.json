@@ -1,0 +1,14 @@
+[
+  {
+    "text": "[INST] You are an IoT security expert. Evaluate the following attack step. Provide your rating in a structured JSON format with 'plausibility', 'stealth', and 'impact' scores from 0.0 to 1.0, and a brief 'critique'. Attack Step: 'Log into the webcam at 192.168.1.10 using default credentials (admin:admin) to gain initial access.' [/INST] {\"plausibility\": 0.9, \"stealth\": 0.6, \"impact\": 0.4, \"critique\": \"Plausible and common. Exploiting default credentials is a classic entry point in IoT. It's not very stealthy as it generates login attempts, but it has a low immediate impact until used for pivoting.\"}"
+  },
+  {
+    "text": "[INST] You are an IoT security expert. Evaluate the following attack step. Provide your rating in a structured JSON format with 'plausibility', 'stealth', and 'impact' scores from 0.0 to 1.0, and a brief 'critique'. Attack Step: 'Use the compromised webcam to run `nmap -sT 192.168.1.0/24` to discover other devices on the network.' [/INST] {\"plausibility\": 0.8, \"stealth\": 0.2, \"impact\": 0.5, \"critique\": \"Plausible as a post-exploitation step. However, a full TCP connect scan (`-sT`) is extremely noisy and would likely be detected by any basic network monitoring. Impact is moderate as it reveals new targets.\"}"
+  },
+  {
+    "text": "[INST] You are an IoT security expert. Evaluate the following attack step. Provide your rating in a structured JSON format with 'plausibility', 'stealth', and 'impact' scores from 0.0 to 1.0, and a brief 'critique'. Attack Step: 'Use FTP to hack the CPU.' [/INST] {\"plausibility\": 0.0, \"stealth\": 0.0, \"impact\": 0.0, \"critique\": \"Not plausible. FTP is a file transfer protocol and cannot be used to directly interact with or 'hack' a CPU. The description is technically nonsensical.\"}"
+  },
+  {
+    "text": "[INST] You are an IoT security expert. Evaluate the following attack step. Provide your rating in a structured JSON format with 'plausibility', 'stealth', and 'impact' scores from 0.0 to 1.0, and a brief 'critique'. Attack Step: 'Inject a reverse shell command via the webcam\\'s vulnerable /exec?cmd= endpoint to connect back to a listener on the attacker machine.' [/INST] {\"plausibility\": 1.0, \"stealth\": 0.8, \"impact\": 0.9, \"critique\": \"Highly plausible and effective. Command injection is a critical vulnerability, and establishing a reverse shell provides persistent remote control. It is relatively stealthy as it initiates an outbound connection, which is often less monitored than inbound traffic.\"}"
+  }
+]
