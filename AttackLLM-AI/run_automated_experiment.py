@@ -13,7 +13,7 @@ from peft import PeftModel
 # --- Configuration ---
 MODEL_ID = "mistralai/Mistral-7B-Instruct-v0.3"
 ADAPTER_PATH = "./fine_tuned_discriminator"
-RESULTS_DIR = "./experiment_results"
+BASE_RESULTS_DIR = "./experiment_results"
 TOTAL_ITERATIONS = 10  # Set to 100 or more for a comprehensive run
 
 
@@ -41,10 +41,16 @@ def calculate_metric_score(evaluation, key):
 
 
 class AttackLLMGAN:
-    def __init__(self, model_id, adapter_path, results_dir):
-        self.model_id, self.adapter_path, self.results_dir = model_id, adapter_path, results_dir
+    def __init__(self, model_id, adapter_path, base_results_dir):
+        self.model_id, self.adapter_path = model_id, adapter_path
         self.history = []
-        if not os.path.exists(self.results_dir): os.makedirs(self.results_dir)
+
+        # Create a unique directory for this specific experiment run
+        timestamp = time.strftime('%Y%m%d_%H%M%S')
+        self.results_dir = os.path.join(base_results_dir, f"run_{timestamp}")
+        os.makedirs(self.results_dir, exist_ok=True)
+        print(f"Results for this run will be saved in: {self.results_dir}")
+
         self.quantization_config = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4",
                                                       bnb_4bit_compute_dtype=torch.float16)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_id)
@@ -90,90 +96,94 @@ class AttackLLMGAN:
         self._clear_gpu_memory()
         return evaluations
 
-    def plot_results(self):
+    def save_and_plot_results(self):
         if not self.history: return
-
-        # ** THE FIX IS HERE **
-        # Only include iterations that were successful and have metrics
         successful_iterations = [item for item in self.history if item.get("generated_plan") and item.get("metrics")]
-
-        if not successful_iterations:
-            print("No successful iterations with metrics to plot.")
-            return
+        if not successful_iterations: return
 
         iterations = [item['iteration'] for item in successful_iterations]
         metrics = [item['metrics'] for item in successful_iterations]
 
-        fig, axs = plt.subplots(2, 1, figsize=(15, 15), sharex=True)
-        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-        fig.suptitle(f'AttackLLM-GAN Performance Metrics ({timestamp})', fontsize=16)
+        def save_plot(title, ylabel, data, filename, is_bar=False):
+            plt.figure(figsize=(12, 7))
+            if is_bar:
+                plt.bar(iterations, data, color='skyblue')
+            else:
+                plt.plot(iterations, data, marker='o', linestyle='-')
+            plt.title(title, fontsize=16), plt.xlabel('Adversarial Iteration', fontsize=12)
+            plt.ylabel(ylabel, fontsize=12), plt.grid(True)
+            plt.savefig(os.path.join(self.results_dir, filename))
+            plt.close()
+            print(f"Chart saved: {filename}")
 
-        axs[0].plot(iterations, [m['avg_plausibility'] for m in metrics], marker='o', linestyle='-',
-                    label='Avg Plausibility')
-        axs[0].plot(iterations, [m['avg_stealth'] for m in metrics], marker='x', linestyle='--', label='Avg Stealth')
-        axs[0].plot(iterations, [m['avg_impact'] for m in metrics], marker='^', linestyle=':', label='Avg Impact')
-        axs[0].set_ylabel('Average Score (0.0 - 1.0)'), axs[0].set_title('Plan Quality Metrics'), axs[0].legend(), axs[
-            0].grid(True)
+        # Individual Plots
+        save_plot('Average Plausibility Over Time', 'Avg Plausibility Score (0-1)',
+                  [m['avg_plausibility'] for m in metrics], 'plausibility_over_time.png')
+        save_plot('Average Stealth Over Time', 'Avg Stealth Score (0-1)', [m['avg_stealth'] for m in metrics],
+                  'stealth_over_time.png')
+        save_plot('Average Impact Over Time', 'Avg Impact Score (0-1)', [m['avg_impact'] for m in metrics],
+                  'impact_over_time.png')
 
-        ax2 = axs[1].twinx()
-        axs[1].bar(iterations, [m['plan_length'] for m in metrics], color='g', alpha=0.6, label='Plan Length (Steps)')
+        # Combined Complexity Plot
+        fig, ax1 = plt.subplots(figsize=(12, 7))
+        ax1.bar(iterations, [m['plan_length'] for m in metrics], color='g', alpha=0.6, label='Plan Length')
+        ax1.set_xlabel('Adversarial Iteration', fontsize=12), ax1.set_ylabel('Plan Length (Steps)', color='g',
+                                                                             fontsize=12)
+        ax2 = ax1.twinx()
         ax2.plot(iterations, [m['technique_diversity'] for m in metrics], color='r', marker='d', linestyle='-',
                  label='Technique Diversity')
-        axs[1].set_ylabel('Plan Length (Steps)'), ax2.set_ylabel('Unique ATT&CK IDs')
-        axs[1].set_title('Plan Complexity and Diversity'), axs[1].legend(loc='upper left'), ax2.legend(
-            loc='upper right'), axs[1].grid(True, axis='y')
+        ax2.set_ylabel('Unique ATT&CK IDs', color='r', fontsize=12)
+        plt.title('Plan Complexity and Diversity Over Time', fontsize=16), fig.legend(loc="upper right",
+                                                                                      bbox_to_anchor=(0.9, 0.9))
+        plt.grid(True), plt.savefig(os.path.join(self.results_dir, 'complexity_over_time.png')), plt.close()
+        print("Chart saved: complexity_over_time.png")
 
-        plt.xlabel('Adversarial Iteration')
-        plt.tight_layout(rect=[0, 0, 1, 0.96])
+        # New Advanced Plots
+        all_plausibility_scores = [calculate_metric_score(e['evaluation'], 'plausibility') for item in
+                                   successful_iterations for e in item['evaluations']]
+        plt.figure(figsize=(12, 7))
+        plt.hist(all_plausibility_scores, bins=20, color='purple', edgecolor='black')
+        plt.title('Distribution of All Plausibility Scores', fontsize=16), plt.xlabel('Plausibility Score'), plt.ylabel(
+            'Frequency'), plt.grid(True)
+        plt.savefig(os.path.join(self.results_dir, 'score_distribution.png')), plt.close()
+        print("Chart saved: score_distribution.png")
 
-        plot_path = os.path.join(self.results_dir, f"experiment_chart_{time.strftime('%Y%m%d_%H%M%S')}.png")
-        plt.savefig(plot_path)
-        print(f"\nComprehensive performance chart saved to {plot_path}")
+        rolling_avg = np.convolve([m['avg_plausibility'] for m in metrics], np.ones(5) / 5, mode='valid')
+        save_plot('5-Iteration Rolling Average Plausibility', 'Rolling Avg Plausibility', rolling_avg,
+                  'rolling_average_performance.png', xlabel=f"Iteration Window (size=5)")
 
     def print_summary(self):
         print(f"\n{'=' * 20} EXPERIMENT SUMMARY {'=' * 20}")
         if not self.history: return
 
-        # ** THE FIX IS HERE **
         successful_iterations = [item for item in self.history if item.get("generated_plan") and item.get("metrics")]
-
-        total_runs = len(self.history)
-        success_rate = len(successful_iterations) / total_runs if total_runs > 0 else 0
+        total_runs, success_rate = len(self.history), len(successful_iterations) / len(
+            self.history) if self.history else 0
         start_time = datetime.datetime.strptime(self.history[0]['timestamp'], "%Y-%m-%d %H:%M:%S")
         end_time = datetime.datetime.strptime(self.history[-1]['timestamp'], "%Y-%m-%d %H:%M:%S")
 
-        print(f"Total Iterations Run: {total_runs}")
-        print(f"Experiment Duration: {end_time - start_time}")
+        print(f"Results saved in: {self.results_dir}")
+        print(f"Total Iterations Run: {total_runs}, Duration: {end_time - start_time}")
         print(f"Generator Plan Creation Success Rate: {success_rate:.2%}")
 
         if not successful_iterations: return
 
         metrics = [item['metrics'] for item in successful_iterations]
-        avg_plausibility = np.mean([m['avg_plausibility'] for m in metrics])
-        avg_stealth = np.mean([m['avg_stealth'] for m in metrics])
-        avg_impact = np.mean([m['avg_impact'] for m in metrics])
-        avg_plan_length = np.mean([m['plan_length'] for m in metrics])
-        avg_diversity = np.mean([m['technique_diversity'] for m in metrics])
-
         print("\n--- Overall Performance Averages (for successful iterations) ---")
-        print(f"  Average Plan Plausibility: {avg_plausibility:.3f}")
-        print(f"  Average Plan Stealth:      {avg_stealth:.3f}")
-        print(f"  Average Plan Impact:       {avg_impact:.3f}")
-
+        print(f"  Average Plan Plausibility: {np.mean([m['avg_plausibility'] for m in metrics]):.3f}")
+        print(f"  Average Plan Stealth:      {np.mean([m['avg_stealth'] for m in metrics]):.3f}")
+        print(f"  Average Plan Impact:       {np.mean([m['avg_impact'] for m in metrics]):.3f}")
         print("\n--- Plan Complexity & Creativity Averages ---")
-        print(f"  Average Plan Length:      {avg_plan_length:.2f} steps")
-        print(f"  Average Technique Diversity: {avg_diversity:.2f} unique TTPs per plan")
-
+        print(f"  Average Plan Length:      {np.mean([m['plan_length'] for m in metrics]):.2f} steps")
+        print(f"  Average Technique Diversity: {np.mean([m['technique_diversity'] for m in metrics]):.2f} unique TTPs")
         best_iteration = max(successful_iterations, key=lambda x: x['metrics']['avg_plausibility'])
-        print("\n--- Best Performing Iteration ---")
-        print(f"  Iteration Number: {best_iteration['iteration']}")
-        print(f"  Highest Plausibility Score: {best_iteration['metrics']['avg_plausibility']:.3f}")
+        print(
+            f"\n--- Best Iteration: #{best_iteration['iteration']} with Plausibility Score of {best_iteration['metrics']['avg_plausibility']:.3f} ---")
         print(f"{'=' * 62}")
 
     def run_experiment(self, total_iterations):
         network_context = """{"known_devices": [{"ip_address": "172.28.0.10", "device_type": "webcam"}]}"""
-        feedback, log_file_path = "No feedback yet.", os.path.join(self.results_dir,
-                                                                   f"experiment_log_{time.strftime('%Y%m%d_%H%M%S')}.jsonl")
+        feedback, log_file_path = "No feedback yet.", os.path.join(self.results_dir, "experiment_log.jsonl")
 
         for i in range(total_iterations):
             print(f"\n{'=' * 20} ADVERSARIAL ITERATION {i + 1}/{total_iterations} {'=' * 20}")
@@ -183,7 +193,6 @@ class AttackLLMGAN:
             if not generated_plan or "attack_plan" not in generated_plan:
                 feedback = "You failed to produce a valid JSON plan. Please strictly adhere to the format."
             else:
-                print(f"--- [Generator] Plan created with {len(generated_plan['attack_plan'])} steps.")
                 evaluations = self.run_discriminator(generated_plan)
                 plan_steps, num_steps = generated_plan['attack_plan'], len(generated_plan['attack_plan'])
                 unique_ttps = len(set(step.get('technique_id', 'N/A') for step in plan_steps))
@@ -194,21 +203,20 @@ class AttackLLMGAN:
                     evaluations) if evaluations else 0
                 avg_impact = sum(calculate_metric_score(e['evaluation'], 'impact') for e in evaluations) / len(
                     evaluations) if evaluations else 0
-                iteration_data["evaluations"] = evaluations
-                iteration_data["metrics"] = {"avg_plausibility": avg_plausibility, "avg_stealth": avg_stealth,
-                                             "avg_impact": avg_impact, "plan_length": num_steps,
-                                             "technique_diversity": unique_ttps}
+                iteration_data["evaluations"], iteration_data["metrics"] = evaluations, {
+                    "avg_plausibility": avg_plausibility, "avg_stealth": avg_stealth, "avg_impact": avg_impact,
+                    "plan_length": num_steps, "technique_diversity": unique_ttps}
                 feedback = f"The last plan's avg plausibility was {avg_plausibility:.2f}. Critique: {json.dumps(evaluations)}. Improve the plan."
                 print(
                     f"--- Iteration {i + 1} complete. Avg Plausibility: {avg_plausibility:.2f}, Avg Stealth: {avg_stealth:.2f}, Avg Impact: {avg_impact:.2f} ---")
             self.history.append(iteration_data)
             with open(log_file_path, 'a') as f:
                 f.write(json.dumps(iteration_data) + '\n')
-        self.plot_results()
+        self.save_and_plot_results()
         self.print_summary()
 
 
 if __name__ == "__main__":
     # Ensure matplotlib and numpy are installed: pip install matplotlib numpy
-    experiment = AttackLLMGAN(model_id=MODEL_ID, adapter_path=ADAPTER_PATH, results_dir=RESULTS_DIR)
+    experiment = AttackLLMGAN(model_id=MODEL_ID, adapter_path=ADAPTER_PATH, base_results_dir=BASE_RESULTS_DIR)
     experiment.run_experiment(total_iterations=TOTAL_ITERATIONS)
