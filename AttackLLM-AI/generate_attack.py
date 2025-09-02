@@ -7,20 +7,21 @@ def extract_json(text):
     """
     Universally extracts a JSON object from a string, handling various markdown fences.
     """
-    # Pattern to find JSON within ``````markdown, or ```
+    # Correctly formatted raw strings for regex patterns
     patterns = [
-        r"```json\s*(\{.*?\})\s*```
-        r"```markdown\s*(\{.*?\})\s*```
-        r"```\s*(\{.*?\})\s*```
+        r"``````",
+        r"``````",
+        r"``````"
     ]
 
     for pattern in patterns:
         match = re.search(pattern, text, re.DOTALL)
         if match:
             try:
+                # Extract the first capturing group, which is the JSON content
                 return json.loads(match.group(1))
-            except json.JSONDecodeError:
-                continue # Try the next pattern if this one fails
+            except (json.JSONDecodeError, IndexError):
+                continue  # If parsing fails, try the next pattern
 
     # Fallback for plain JSON without any markdown fences
     try:
@@ -36,7 +37,7 @@ def extract_json(text):
                     json_str = text[start_index : start_index + i + 1]
                     return json.loads(json_str)
     except json.JSONDecodeError:
-        pass # If all methods fail, return None
+        pass  # If all methods fail, return None
 
     print("Error: Could not decode or find a valid JSON object in the model's response.")
     return None
@@ -75,9 +76,7 @@ network_context = """
 master_prompt = f"""
 [INST]
 You are an expert automated red teamer. Your task is to generate a sequence of attack steps to achieve a specific goal within a given network context.
-
 **Goal:** Gain initial access to the network via the webcam and then perform reconnaissance to identify other potential targets.
-
 **Instructions:**
 1.  Analyze the provided network context.
 2.  Create a logical, step-by-step attack plan.
@@ -87,7 +86,6 @@ You are an expert automated red teamer. Your task is to generate a sequence of a
     - "technique_id": The relevant MITRE ATT&CK Technique ID (e.g., "T1078.001").
     - "description": A brief, human-readable description of the step.
     - "command": The exact shell command to execute for the step. Use placeholders where necessary.
-
 Generate the attack plan now.
 [/INST]
 """
@@ -102,7 +100,7 @@ with torch.no_grad():
         max_new_tokens=1024,
         pad_token_id=tokenizer.eos_token_id
     )
-    full_response_text = tokenizer.decode(response_tokens, skip_special_tokens=True)
+    full_response_text = tokenizer.decode(response_tokens[0], skip_special_tokens=True)
 
 # --- Parse and Display the Output ---
 response_payload = full_response_text.split("[/INST]")[-1].strip()
