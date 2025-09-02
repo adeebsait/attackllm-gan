@@ -63,7 +63,6 @@ trainer = SFTTrainer(
     train_dataset=dataset,
     args=training_args,
     peft_config=lora_config,
-    dataset_text_field="text",       # The field in our JSON that contains the full training text
     max_seq_length=512,              # The maximum length of a sequence
 )
 
