@@ -1,20 +1,40 @@
 import torch
 import json
+import re
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
-# --- Utility Function to Extract JSON ---
 def extract_json(text):
-    """Safely extracts the first valid JSON object from a string."""
-    try:
+    """
+    Safely extracts a JSON object from a string, handling markdown fences.
+    """
+    # Use regex to find content between ``````, or just the first {..} block
+    match = re.search(r"``````", text, re.DOTALL)
+    if match:
+        json_str = match.group(1)
+    else:
+        # Fallback for plain JSON without markdown fences
         start_index = text.find('{')
-        end_index = text.rfind('}') + 1
-        if start_index != -1 and end_index > start_index:
-            json_str = text[start_index:end_index]
-            return json.loads(json_str)
+        if start_index != -1:
+            # Find the matching closing brace
+            open_braces = 0
+            for i, char in enumerate(text[start_index:]):
+                if char == '{':
+                    open_braces += 1
+                elif char == '}':
+                    open_braces -= 1
+                if open_braces == 0:
+                    json_str = text[start_index : start_index + i + 1]
+                    break
+            else:
+                return None # No matching brace found
+        else:
+            return None # No '{' found
+
+    try:
+        return json.loads(json_str)
     except json.JSONDecodeError:
-        print("Error: Could not decode JSON from the model's response.")
+        print("Error: Could not decode the extracted JSON string.")
         return None
-    return None
 
 # --- Model Loading ---
 model_id = "mistralai/Mistral-7B-Instruct-v0.3"
@@ -50,23 +70,16 @@ network_context = """
 master_prompt = f"""
 [INST]
 You are an expert automated red teamer. Your task is to generate a sequence of attack steps to achieve a specific goal within a given network context.
-
 **Goal:** Gain initial access to the network via the webcam and then perform reconnaissance to identify other potential targets.
-
-**Network Context:**
-{network_context}
-
 **Instructions:**
 1.  Analyze the provided network context.
 2.  Create a logical, step-by-step attack plan.
-3.  The plan must be returned as a single JSON object.
+3.  Your entire response must be ONLY a single, valid JSON object, optionally enclosed in `````` markdown fences.
 4.  The JSON object must contain a single key, "attack_plan", which is a list of steps.
 5.  Each step in the list must be a JSON object with three keys:
     - "technique_id": The relevant MITRE ATT&CK Technique ID (e.g., "T1078.001").
     - "description": A brief, human-readable description of the step.
-    - "command": The exact shell command to execute for the step. Use placeholders like `<attacker_ip>` where necessary.
-6.  **Crucially, ensure your entire response is a single, complete, and valid JSON object. Do not get cut off.**
-
+    - "command": The exact shell command to execute for the step. Use placeholders where necessary.
 Generate the attack plan now.
 [/INST]
 """
@@ -78,7 +91,6 @@ model.eval()
 with torch.no_grad():
     response_tokens = model.generate(
         **model_input,
-        # Increase token limit to prevent truncation
         max_new_tokens=1024,
         pad_token_id=tokenizer.eos_token_id
     )
@@ -95,3 +107,4 @@ if attack_plan_json:
     print(json.dumps(attack_plan_json, indent=2))
 else:
     print("\nCould not parse a valid JSON attack plan from the output.")
+
