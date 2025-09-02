@@ -45,7 +45,6 @@ class AttackLLMGAN:
         self.model_id, self.adapter_path = model_id, adapter_path
         self.history = []
 
-        # Create a unique directory for this specific experiment run
         timestamp = time.strftime('%Y%m%d_%H%M%S')
         self.results_dir = os.path.join(base_results_dir, f"run_{timestamp}")
         os.makedirs(self.results_dir, exist_ok=True)
@@ -67,7 +66,7 @@ class AttackLLMGAN:
                                                      device_map="auto")
         prompt = f"""[INST]You are a silent security tool. Your only output should be a JSON object.
         **Goal:** Create a multi-step attack plan. **Context:** {context} **Feedback:** {feedback}
-        **CRITICAL INSTRUCTION:** Your response MUST be ONLY the JSON object containing the 'attack_plan'. Do NOT include any other text.[/INST]"""
+        **CRITICAL INSTRUCTION:** Your response MUST be ONLY the JSON object containing the 'attack_plan'.[/INST]"""
         inputs = self.tokenizer(prompt, return_tensors="pt").to("cuda")
         with torch.no_grad(): response = model.generate(**inputs, max_new_tokens=1024,
                                                         pad_token_id=self.tokenizer.eos_token_id)
@@ -104,24 +103,25 @@ class AttackLLMGAN:
         iterations = [item['iteration'] for item in successful_iterations]
         metrics = [item['metrics'] for item in successful_iterations]
 
-        def save_plot(title, ylabel, data, filename, is_bar=False):
+        # **THE FIX IS HERE:** The 'xlabel' parameter is added to the function definition.
+        def save_plot(title, ylabel, data_x, data_y, filename, is_bar=False, xlabel="Adversarial Iteration"):
             plt.figure(figsize=(12, 7))
             if is_bar:
-                plt.bar(iterations, data, color='skyblue')
+                plt.bar(data_x, data_y, color='skyblue')
             else:
-                plt.plot(iterations, data, marker='o', linestyle='-')
-            plt.title(title, fontsize=16), plt.xlabel('Adversarial Iteration', fontsize=12)
+                plt.plot(data_x, data_y, marker='o', linestyle='-')
+            plt.title(title, fontsize=16), plt.xlabel(xlabel, fontsize=12)
             plt.ylabel(ylabel, fontsize=12), plt.grid(True)
             plt.savefig(os.path.join(self.results_dir, filename))
             plt.close()
             print(f"Chart saved: {filename}")
 
         # Individual Plots
-        save_plot('Average Plausibility Over Time', 'Avg Plausibility Score (0-1)',
+        save_plot('Average Plausibility Over Time', 'Avg Plausibility Score (0-1)', iterations,
                   [m['avg_plausibility'] for m in metrics], 'plausibility_over_time.png')
-        save_plot('Average Stealth Over Time', 'Avg Stealth Score (0-1)', [m['avg_stealth'] for m in metrics],
-                  'stealth_over_time.png')
-        save_plot('Average Impact Over Time', 'Avg Impact Score (0-1)', [m['avg_impact'] for m in metrics],
+        save_plot('Average Stealth Over Time', 'Avg Stealth Score (0-1)', iterations,
+                  [m['avg_stealth'] for m in metrics], 'stealth_over_time.png')
+        save_plot('Average Impact Over Time', 'Avg Impact Score (0-1)', iterations, [m['avg_impact'] for m in metrics],
                   'impact_over_time.png')
 
         # Combined Complexity Plot
@@ -142,15 +142,15 @@ class AttackLLMGAN:
         all_plausibility_scores = [calculate_metric_score(e['evaluation'], 'plausibility') for item in
                                    successful_iterations for e in item['evaluations']]
         plt.figure(figsize=(12, 7))
-        plt.hist(all_plausibility_scores, bins=20, color='purple', edgecolor='black')
+        plt.hist(all_plausibility_scores, bins=np.arange(0, 1.1, 0.05), color='purple', edgecolor='black')
         plt.title('Distribution of All Plausibility Scores', fontsize=16), plt.xlabel('Plausibility Score'), plt.ylabel(
             'Frequency'), plt.grid(True)
         plt.savefig(os.path.join(self.results_dir, 'score_distribution.png')), plt.close()
         print("Chart saved: score_distribution.png")
 
-        rolling_avg = np.convolve([m['avg_plausibility'] for m in metrics], np.ones(5) / 5, mode='valid')
-        save_plot('5-Iteration Rolling Average Plausibility', 'Rolling Avg Plausibility', rolling_avg,
-                  'rolling_average_performance.png', xlabel=f"Iteration Window (size=5)")
+        rolling_avg = np.convolve([m['avg_plausibility'] for m in metrics], np.ones(3) / 3, mode='valid')
+        save_plot('3-Iteration Rolling Average Plausibility', 'Rolling Avg Plausibility', range(3, len(metrics) + 1),
+                  rolling_avg, 'rolling_average_performance.png', xlabel=f"Iteration Window (size=3)")
 
     def print_summary(self):
         print(f"\n{'=' * 20} EXPERIMENT SUMMARY {'=' * 20}")
