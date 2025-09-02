@@ -73,13 +73,13 @@ for i in range(number_of_iterations):
     response_text = tokenizer.decode(response[0], skip_special_tokens=True)
     generated_plan = extract_json(response_text.split("[/INST]")[-1])
 
-    # Clean up Generator to free VRAM
     del generator_model
     clear_gpu_memory()
     print("--- [Generator] Model unloaded from GPU.")
 
     if not generated_plan or "attack_plan" not in generated_plan:
-        feedback_from_discriminator = "You failed to produce a valid JSON plan. Please try again."
+        print("Generator failed to produce a valid plan. Providing feedback to try again.")
+        feedback_from_discriminator = "You failed to produce a valid JSON plan. Please try again, ensuring your output is a single, complete JSON object with an 'attack_plan' key."
         continue
 
     print(f"--- [Generator] Plan created with {len(generated_plan['attack_plan'])} steps.")
@@ -111,7 +111,6 @@ for i in range(number_of_iterations):
     print("--- [Discriminator] Evaluations complete:")
     print(json.dumps(evaluations, indent=2))
 
-    # Clean up Discriminator to free VRAM
     del discriminator_base
     del discriminator_model
     clear_gpu_memory()
