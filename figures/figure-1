@@ -1,0 +1,23 @@
+---
+config:
+  theme: redux
+---
+graph TD
+    subgraph "Input Layer"
+        A[Network Parser]
+        B[DB Interface]
+        C[Historical Data]
+    end
+    subgraph "Generator Module"
+        D["Mistral-7B"]
+        E[Prompt Engine]
+        F[Temperature Control]
+        G[Output Validation]
+    end
+    A --> D
+    B --> D
+    C --> D
+    D --> E
+    E --> F
+    F --> G
+    G --> H((To Discriminator & Diversity Monitoring))
